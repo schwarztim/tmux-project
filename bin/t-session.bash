@@ -14,6 +14,7 @@ fi
 # Config locations
 : "${TMUX_PROJECT_DIR:=$HOME/.config/tmux-project}"
 : "${TMUX_PROJECT_PATHS:=$TMUX_PROJECT_DIR/workspace-paths}"
+: "${TMUX_PROJECT_ROOTS:=$TMUX_PROJECT_DIR/project-roots}"
 : "${TMUX_PROJECT_HOOKS:=$TMUX_PROJECT_DIR/hooks}"
 : "${TMUX_PROJECT_DEFAULT_DIR:=$HOME/Projects}"
 : "${TMUX_PROJECT_FAVORITES:=$TMUX_PROJECT_DIR/favorites}"
@@ -21,6 +22,8 @@ fi
 declare -A _TP_PROJECTS=()
 declare -A _TP_ALIASES=()
 declare -A _TP_FAVORITES=()
+declare -A _TP_PROJECT_ROOT_LABELS=()
+declare -A _TP_PROJECT_ROOT_BASES=()
 
 _tp_load_aliases() {
     _TP_ALIASES=()
@@ -32,18 +35,118 @@ _tp_load_aliases() {
     done < "$af"
 }
 
+_tp_expand_path() {
+    local value="$1"
+    value="${value/#\~/$HOME}"
+    printf '%s' "$value"
+}
+
+_tp_root_label_for_path() {
+    local root_path="${1%/}"
+    local label="${root_path##*/}"
+    [[ -n "$label" ]] || label="root"
+    printf '%s' "$label"
+}
+
+_tp_unique_project_name() {
+    local candidate="$1" project_path="$2"
+    local base="$candidate" index=2
+    while [[ -n "${_TP_PROJECTS[$candidate]+_}" && "${_TP_PROJECTS[$candidate]}" != "$project_path" ]]; do
+        candidate="${base}-${index}"
+        index=$((index + 1))
+    done
+    printf '%s' "$candidate"
+}
+
+_tp_add_project() {
+    local raw_name="$1" project_path="$2" root_label="${3:-}"
+    [[ -z "$raw_name" || -z "$project_path" ]] && return 0
+
+    local display="${_TP_ALIASES[$raw_name]:-$raw_name}"
+    local candidate="$display"
+
+    if [[ -n "$root_label" && -n "${_TP_PROJECT_ROOT_BASES[$display]:-}" && -z "${_TP_PROJECTS[$candidate]+_}" ]]; then
+        candidate="${root_label}/${display}"
+    fi
+
+    if [[ -n "${_TP_PROJECTS[$candidate]+_}" ]]; then
+        [[ "${_TP_PROJECTS[$candidate]}" == "$project_path" ]] && return 0
+        local existing_path="${_TP_PROJECTS[$candidate]}"
+        local existing_root_label="${_TP_PROJECT_ROOT_LABELS[$candidate]:-}"
+        if [[ -n "$existing_root_label" ]]; then
+            unset "_TP_PROJECTS[$candidate]"
+            unset "_TP_PROJECT_ROOT_LABELS[$candidate]"
+            local existing_candidate
+            existing_candidate=$(_tp_unique_project_name "${existing_root_label}/${display}" "$existing_path")
+            _TP_PROJECTS["$existing_candidate"]="$existing_path"
+            _TP_PROJECT_ROOT_LABELS["$existing_candidate"]="$existing_root_label"
+        fi
+
+        if [[ -n "$root_label" ]]; then
+            candidate="${root_label}/${display}"
+        else
+            candidate="${display}-2"
+        fi
+
+        candidate=$(_tp_unique_project_name "$candidate" "$project_path")
+    fi
+
+    _TP_PROJECTS["$candidate"]="$project_path"
+    [[ -n "$root_label" ]] && _TP_PROJECT_ROOT_LABELS["$candidate"]="$root_label"
+    [[ -n "$root_label" ]] && _TP_PROJECT_ROOT_BASES["$display"]=1
+}
+
+_tp_load_root_projects() {
+    [[ -f "$TMUX_PROJECT_ROOTS" ]] || return 0
+
+    local entry root_label root_path project_dir name nullglob_was_set
+    shopt -q nullglob
+    nullglob_was_set=$?
+    shopt -s nullglob
+
+    while IFS= read -r entry; do
+        [[ -z "$entry" || "$entry" == \#* ]] && continue
+        if [[ "$entry" == *=* ]]; then
+            root_label="${entry%%=*}"
+            root_path="${entry#*=}"
+        else
+            root_label=""
+            root_path="$entry"
+        fi
+
+        root_path=$(_tp_expand_path "$root_path")
+        root_path="${root_path%/}"
+        [[ -d "$root_path" ]] || continue
+        [[ -n "$root_label" ]] || root_label=$(_tp_root_label_for_path "$root_path")
+
+        for project_dir in "$root_path"/*; do
+            [[ -d "$project_dir" ]] || continue
+            name="${project_dir##*/}"
+            [[ -z "$name" || "$name" == .* ]] && continue
+            _tp_add_project "$name" "${project_dir%/}" "$root_label"
+        done
+    done < "$TMUX_PROJECT_ROOTS"
+
+    (( nullglob_was_set == 0 )) || shopt -u nullglob
+}
+
 _tp_load_projects() {
     _TP_PROJECTS=()
-    [[ -f "$TMUX_PROJECT_PATHS" ]] || return 0
+    _TP_PROJECT_ROOT_LABELS=()
+    _TP_PROJECT_ROOT_BASES=()
 
     _tp_load_aliases
 
-    local name project_path short
-    while IFS='=' read -r name project_path; do
-        [[ -z "$name" || "$name" == \#* ]] && continue
-        short="${_TP_ALIASES[$name]:-$name}"
-        _TP_PROJECTS["$short"]="$project_path"
-    done < "$TMUX_PROJECT_PATHS"
+    if [[ -f "$TMUX_PROJECT_PATHS" ]]; then
+        local name project_path
+        while IFS='=' read -r name project_path; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            project_path=$(_tp_expand_path "$project_path")
+            _tp_add_project "$name" "$project_path"
+        done < "$TMUX_PROJECT_PATHS"
+    fi
+
+    _tp_load_root_projects
 }
 
 _tp_load_favorites() {
@@ -109,6 +212,152 @@ _tp_clean_name() {
     value="${value#$'\n'}"
     value="${value#\\n}"
     printf '%s' "$value"
+}
+
+_tp_select_project_root() {
+    local _fzf="$1"
+    local root_lines="" count=0 entry root_label root_path choice
+    local root_delim=$'\t'
+
+    if [[ -f "$TMUX_PROJECT_ROOTS" ]]; then
+        while IFS= read -r entry; do
+            [[ -z "$entry" || "$entry" == \#* ]] && continue
+            if [[ "$entry" == *=* ]]; then
+                root_label="${entry%%=*}"
+                root_path="${entry#*=}"
+            else
+                root_label=""
+                root_path="$entry"
+            fi
+
+            root_path=$(_tp_expand_path "$root_path")
+            root_path="${root_path%/}"
+            [[ -n "$root_path" ]] || continue
+            [[ -n "$root_label" ]] || root_label=$(_tp_root_label_for_path "$root_path")
+            root_lines+="${root_label}${root_delim}${root_path}"$'\n'
+            count=$((count + 1))
+        done < "$TMUX_PROJECT_ROOTS"
+    fi
+
+    if (( count == 0 )); then
+        _tp_expand_path "$TMUX_PROJECT_DEFAULT_DIR"
+    elif (( count == 1 )); then
+        root_lines="${root_lines%$'\n'}"
+        printf '%s\n' "$root_lines" | cut -f 2-
+    else
+        choice=$(printf '%s' "$root_lines" | "$_fzf" --no-sort --ansi \
+            --border-label ' project roots ' --prompt 'root> ' \
+            --header '  Pick parent folder for the new project' \
+            --pointer '>' --cycle)
+        [[ -z "$choice" ]] && return 1
+        printf '%s\n' "$choice" | cut -f 2-
+    fi
+}
+
+troot() {
+    local cmd="${1:-list}"
+    shift 2>/dev/null || true
+    mkdir -p "$TMUX_PROJECT_DIR"
+    touch "$TMUX_PROJECT_ROOTS"
+
+    case "$cmd" in
+        list)
+            if [[ -s "$TMUX_PROJECT_ROOTS" ]]; then
+                nl -ba "$TMUX_PROJECT_ROOTS"
+            else
+                echo "tmux-project: no project roots configured"
+            fi
+            ;;
+        add)
+            local create=0
+            if [[ "${1:-}" == "--create" ]]; then
+                create=1
+                shift
+            fi
+            local entry="$*"
+            if [[ -z "$entry" ]]; then
+                echo "usage: troot add [--create] [label=]/path" >&2
+                return 2
+            fi
+
+            local label="" root_path root_entry
+            if [[ "$entry" == *=* ]]; then
+                label="${entry%%=*}"
+                root_path="${entry#*=}"
+            else
+                root_path="$entry"
+            fi
+            root_path=$(_tp_expand_path "$root_path")
+            root_path="${root_path%/}"
+            if [[ ! -d "$root_path" ]]; then
+                if (( create )); then
+                    mkdir -p "$root_path"
+                else
+                    echo "tmux-project: root does not exist: $root_path" >&2
+                    echo "rerun with: troot add --create ${entry}" >&2
+                    return 1
+                fi
+            fi
+
+            if [[ -n "$label" ]]; then
+                root_entry="${label}=${root_path}"
+            else
+                root_entry="$root_path"
+            fi
+            if grep -qxF "$root_entry" "$TMUX_PROJECT_ROOTS" 2>/dev/null; then
+                echo "tmux-project: root already configured: $root_entry"
+            else
+                printf '%s\n' "$root_entry" >> "$TMUX_PROJECT_ROOTS"
+                echo "tmux-project: added root: $root_entry"
+            fi
+            ;;
+        remove|rm|delete)
+            local target="$*"
+            if [[ -z "$target" ]]; then
+                echo "usage: troot remove <label-or-path>" >&2
+                return 2
+            fi
+            local expanded_target
+            expanded_target=$(_tp_expand_path "$target")
+            expanded_target="${expanded_target%/}"
+            local tmp_file="${TMUX_PROJECT_ROOTS}.tmp.$$"
+            local removed=0 entry label root_path
+            while IFS= read -r entry; do
+                if [[ "$entry" == *=* ]]; then
+                    label="${entry%%=*}"
+                    root_path="${entry#*=}"
+                else
+                    label=""
+                    root_path="$entry"
+                fi
+                root_path=$(_tp_expand_path "$root_path")
+                root_path="${root_path%/}"
+                if [[ "$entry" == "$target" || "$label" == "$target" || "$root_path" == "$expanded_target" ]]; then
+                    removed=1
+                    continue
+                fi
+                printf '%s\n' "$entry"
+            done < "$TMUX_PROJECT_ROOTS" > "$tmp_file"
+            mv "$tmp_file" "$TMUX_PROJECT_ROOTS"
+            if (( removed )); then
+                echo "tmux-project: removed root matching: $target"
+            else
+                echo "tmux-project: no root matched: $target" >&2
+                return 1
+            fi
+            ;;
+        edit)
+            "${EDITOR:-vi}" "$TMUX_PROJECT_ROOTS"
+            ;;
+        help|-h|--help)
+            echo "usage: troot list | add [--create] [label=]/path | remove <label-or-path> | edit"
+            ;;
+        *)
+            echo "tmux-project: unknown troot command: $cmd" >&2
+            echo "usage: troot list | add [--create] [label=]/path | remove <label-or-path> | edit" >&2
+            return 2
+            ;;
+    esac
 }
 
 _tp_in_tmux_picker() {
@@ -251,7 +500,10 @@ t() {
         new_name=$(_tp_clean_name "$new_name")
         [[ -z "$new_name" ]] && return
 
-        local new_path="${TMUX_PROJECT_DEFAULT_DIR}/$new_name"
+        local parent_dir
+        parent_dir=$(_tp_select_project_root "$_fzf") || return
+        parent_dir="${parent_dir%/}"
+        local new_path="${parent_dir}/$new_name"
         # bash uses read -e for readline editing (instead of zsh vared)
         printf "Project path [%s]: " "$new_path"
         local user_path
@@ -376,6 +628,7 @@ alias thelp='echo "
 
   Config:
      \$TMUX_PROJECT_DIR/workspace-paths   Project registry (name=path)
+     \$TMUX_PROJECT_DIR/project-roots     Project parent folders
      \$TMUX_PROJECT_DIR/aliases           Display name overrides
      \$TMUX_PROJECT_DIR/favorites         Pinned projects
      \$TMUX_PROJECT_DIR/hooks/            Lifecycle hooks
@@ -383,5 +636,12 @@ alias thelp='echo "
   Env vars:
      TMUX_PROJECT_DIR         Config dir (default: ~/.config/tmux-project)
      TMUX_PROJECT_DEFAULT_DIR Default new project parent (default: ~/Projects)
+     TMUX_PROJECT_ROOTS       Project roots file
      TMUX_PROJECT_FAVORITES   Favorites file
+
+  Root management:
+     troot list
+     troot add [--create] [label=]/path
+     troot remove <label-or-path>
+     troot edit
 "'

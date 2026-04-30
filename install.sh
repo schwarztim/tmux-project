@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${TMUX_PROJECT_DIR:-$HOME/.config/tmux-project}"
+PROJECT_ROOTS_FILE="${TMUX_PROJECT_ROOTS:-$CONFIG_DIR/project-roots}"
 
 # Colors (if terminal supports them)
 if [[ -t 1 ]]; then
@@ -64,6 +65,19 @@ detect_rc_file() {
     esac
 }
 
+expand_path() {
+    local value="$1"
+    value="${value/#\~/$HOME}"
+    printf '%s' "$value"
+}
+
+root_label_for_path() {
+    local root_path="${1%/}"
+    local label="${root_path##*/}"
+    [[ -n "$label" ]] || label="root"
+    printf '%s' "$label"
+}
+
 migrate_legacy_config() {
     local target_paths="$CONFIG_DIR/workspace-paths"
     local target_aliases="$CONFIG_DIR/aliases"
@@ -96,9 +110,88 @@ migrate_legacy_config() {
     fi
 }
 
+seed_project_roots() {
+    mkdir -p "$CONFIG_DIR"
+    if [[ ! -s "$PROJECT_ROOTS_FILE" ]]; then
+        local default_root
+        default_root=$(expand_path "${TMUX_PROJECT_DEFAULT_DIR:-$HOME/Projects}")
+        mkdir -p "$default_root"
+        printf '%s\n' "$default_root" > "$PROJECT_ROOTS_FILE"
+        info "Default project root: $default_root"
+    fi
+}
+
+configure_project_roots() {
+    header "Project Roots"
+    mkdir -p "$CONFIG_DIR"
+
+    echo "Project roots are parent folders whose direct child directories appear in the picker."
+    echo "Add as many roots as you want, across macOS, Linux, WSL, or Git Bash paths."
+    echo "Format stored in $PROJECT_ROOTS_FILE:"
+    echo "  /path/to/projects"
+    echo "  work=/path/to/work-projects"
+    echo ""
+
+    if [[ -s "$PROJECT_ROOTS_FILE" ]]; then
+        echo "Current roots:"
+        sed 's/^/  /' "$PROJECT_ROOTS_FILE"
+        echo ""
+        read -rp "Replace existing project roots? [y/N] " ans
+        if [[ "$ans" =~ ^[yY] ]]; then
+            : > "$PROJECT_ROOTS_FILE"
+        fi
+    fi
+
+    if [[ -s "$PROJECT_ROOTS_FILE" ]]; then
+        read -rp "Add another project root? [y/N] " ans
+        [[ "$ans" =~ ^[yY] ]] || return
+    else
+        read -rp "Configure project roots now? [Y/n] " ans
+        if [[ "$ans" =~ ^[nN] ]]; then
+            seed_project_roots
+            return
+        fi
+    fi
+
+    while true; do
+        local default_root root_path root_label root_entry create_ans another_ans
+        default_root=$(expand_path "${TMUX_PROJECT_DEFAULT_DIR:-$HOME/Projects}")
+        read -rp "Project root path [$default_root]: " root_path
+        root_path="${root_path:-$default_root}"
+        root_path=$(expand_path "$root_path")
+        root_path="${root_path%/}"
+        [[ -n "$root_path" ]] || continue
+
+        if [[ ! -d "$root_path" ]]; then
+            read -rp "Create $root_path? [Y/n] " create_ans
+            [[ "$create_ans" =~ ^[nN] ]] || mkdir -p "$root_path"
+        fi
+
+        read -rp "Optional root label [$(root_label_for_path "$root_path")]: " root_label
+        if [[ -n "$root_label" ]]; then
+            root_entry="${root_label}=${root_path}"
+        else
+            root_entry="$root_path"
+        fi
+
+        if ! grep -qxF "$root_entry" "$PROJECT_ROOTS_FILE" 2>/dev/null; then
+            printf '%s\n' "$root_entry" >> "$PROJECT_ROOTS_FILE"
+            info "Added project root: $root_entry"
+        else
+            warn "Project root already configured: $root_entry"
+        fi
+
+        read -rp "Add another project root? [y/N] " another_ans
+        [[ "$another_ans" =~ ^[yY] ]] || break
+    done
+
+    seed_project_roots
+}
+
 # --- Component installers ---
 
 install_session_manager() {
+    local mode="${1:-interactive}"
     header "Session Manager (t function)"
     local shell_type
     shell_type=$(detect_shell)
@@ -131,6 +224,11 @@ install_session_manager() {
     # Create config dir and empty workspace-paths if needed
     mkdir -p "$CONFIG_DIR/hooks"
     migrate_legacy_config
+    if [[ "$mode" == "interactive" ]]; then
+        configure_project_roots
+    else
+        seed_project_roots
+    fi
     info "Config directory: $CONFIG_DIR"
 }
 
@@ -207,14 +305,14 @@ main() {
     check_deps
 
     if [[ "${1:-}" == "--all" ]]; then
-        install_session_manager
+        install_session_manager automatic
         install_status_bar
         install_tmux_conf
         install_hooks
     else
         echo ""
         read -rp "Install session manager (t function)? [Y/n] " ans
-        [[ ! "$ans" =~ ^[nN] ]] && install_session_manager
+        [[ ! "$ans" =~ ^[nN] ]] && install_session_manager interactive
 
         read -rp "Install status bar (CPU/MEM/NET/battery)? [Y/n] " ans
         [[ ! "$ans" =~ ^[nN] ]] && install_status_bar
