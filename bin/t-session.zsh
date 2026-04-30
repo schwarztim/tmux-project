@@ -195,6 +195,33 @@ _tp_session_line_for() {
     return 1
 }
 
+_tp_create_session() {
+    local _tmux="$1" session_name="$2" project_path="${3:-}"
+    if [[ -n "$TMUX" ]]; then
+        if [[ -n "$project_path" ]]; then
+            "$_tmux" new-session -d -s "$session_name" -c "$project_path"
+        else
+            "$_tmux" new-session -d -s "$session_name"
+        fi
+        "$_tmux" switch-client -t "$session_name"
+    else
+        if [[ -n "$project_path" ]]; then
+            "$_tmux" new-session -s "$session_name" -c "$project_path"
+        else
+            "$_tmux" new-session -s "$session_name"
+        fi
+    fi
+}
+
+_tp_open_session() {
+    local _tmux="$1" session_name="$2"
+    if [[ -n "$TMUX" ]]; then
+        "$_tmux" switch-client -t "$session_name"
+    else
+        "$_tmux" attach-session -t "$session_name"
+    fi
+}
+
 _tp_clean_name() {
     local value="$1"
     value="${value#$'\n'}"
@@ -391,12 +418,6 @@ t() {
     # Ensure config dir exists
     [[ -d "$TMUX_PROJECT_DIR" ]] || mkdir -p "$TMUX_PROJECT_DIR"
 
-    # If already in tmux, use session picker
-    if [[ -n "$TMUX" ]]; then
-        _tp_in_tmux_picker "$_fzf" "$_tmux"
-        return
-    fi
-
     # Load projects from workspace-paths
     _tp_load_projects
     _tp_load_favorites
@@ -513,7 +534,7 @@ t() {
         read label
         label=$(_tp_clean_name "$label")
         [[ -z "$label" ]] && return
-        "$_tmux" new-session -s "${new_name}/${label}" -c "$new_path"
+        _tp_create_session "$_tmux" "${new_name}/${label}" "$new_path"
         return
     fi
 
@@ -571,7 +592,7 @@ t() {
             read label
             label=$(_tp_clean_name "$label")
             [[ -z "$label" ]] && return
-            "$_tmux" new-session -s "$label"
+            _tp_create_session "$_tmux" "$label"
         else
             printf "Session label (creates ${proj_name}/<label>): "
             local label
@@ -580,12 +601,12 @@ t() {
             [[ -z "$label" ]] && return
             local session_name="${proj_name}/${label}"
             local proj_path="${_TP_PROJECTS[$proj_name]}"
-            "$_tmux" new-session -s "$session_name" -c "$proj_path"
+            _tp_create_session "$_tmux" "$session_name" "$proj_path"
         fi
     else
         local name
         name=$(_tp_clean_name "${sess_choice%%  *}")
-        "$_tmux" attach-session -t "$name"
+        _tp_open_session "$_tmux" "$name"
     fi
 }
 
@@ -597,7 +618,7 @@ alias thelp='echo "
     t            Project picker -> session picker / new (F pins/unpins favorite)
 
   Inside tmux:
-    t            Session switcher (sesh if available, fzf fallback)
+    t            Same project/session picker; switches clients instead of attaching
 
   Sessions:
     Named {project}/{label} (e.g. myapp/frontend)

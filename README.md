@@ -4,7 +4,7 @@ Project-first tmux session manager. Organizes tmux sessions by project with an f
 
 ## What It Does
 
-- **`t` command** — Outside tmux: pick a project, then pick/create a session. Inside tmux: switch sessions (uses [sesh](https://github.com/joshmedeski/sesh) if installed, fzf fallback otherwise).
+- **`t` command** — Pick a project, then pick/create a session. Outside tmux it attaches; inside tmux it switches the current client without disrupting other sessions.
 - **Project roots + registry** — Configure one or many parent folders in `~/.config/tmux-project/project-roots`; direct child directories appear automatically in the picker. Add explicit one-off entries in `workspace-paths`.
 - **Favorites + active-first ordering** — Press `F` in the project picker to pin or unpin a project. Favorites are shown first, projects with active sessions next, then the remaining projects alphabetically.
 - **Status bar** — CPU, memory, network, and battery in your tmux status line. Auto-detects macOS, Linux, and Windows (MSYS2/WSL).
@@ -16,7 +16,7 @@ Project-first tmux session manager. Organizes tmux sessions by project with an f
 - **tmux** (3.x+)
 - **fzf** (0.30+)
 - **bash** (4.0+) or **zsh** (5.0+)
-- **sesh** (optional) — enhanced in-tmux session switching with zoxide integration
+- **sesh** (optional) — useful separately if you want a general tmux/zoxide session switcher
 
 ## Install
 
@@ -46,7 +46,7 @@ If you are migrating from the old `~/claude-rules/shell/t-session.zsh` setup, th
 ## Usage
 
 ```
-t              # Launch project picker (or session switcher if inside tmux)
+t              # Launch project picker
 troot          # List configured project roots
 troot add work=~/Work
 troot add --create personal=~/Projects
@@ -69,8 +69,9 @@ When creating a new project, `t` uses your configured project roots:
 
 ### Inside tmux
 
-- With sesh: full session switcher with zoxide, kill, filter by type
-- Without sesh: fzf list of tmux sessions with kill support
+The same project picker is used inside tmux. Existing sessions are opened with
+`switch-client`; new sessions are created detached and then switched to, so no
+nested tmux client is started.
 
 ## Configuration
 
