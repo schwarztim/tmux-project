@@ -328,7 +328,8 @@ main() {
     local shell_type rc_file
     shell_type=$(detect_shell)
     rc_file=$(detect_rc_file "$shell_type")
-    echo "  Restart your shell or run: source $rc_file"
+    echo "  Restart your shell or run: exec \"\$SHELL\" -l"
+    echo "  Reloading with source $rc_file may keep stale function state in existing panes."
     echo "  Then type 't' to launch the project picker."
     echo "  Type 'thelp' for usage info."
     echo ""

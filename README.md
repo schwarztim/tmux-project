@@ -41,6 +41,15 @@ Or install everything at once:
 bash install.sh --all
 ```
 
+After installing or updating, open a new terminal or restart the current shell:
+
+```bash
+exec "$SHELL" -l
+```
+
+This is more reliable than re-sourcing `~/.zshrc` in an existing pane because it
+starts with a clean shell state before loading the updated `t` function.
+
 If you are migrating from the old `~/claude-rules/shell/t-session.zsh` setup, the installer imports `~/claude-rules/.workspace-paths` and its project aliases into `~/.config/tmux-project/` when the new config files are missing or empty.
 
 ## Usage
