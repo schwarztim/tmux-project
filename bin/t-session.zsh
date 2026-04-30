@@ -572,16 +572,13 @@ t() {
         fi
     fi
 
-    local sess_choice
-    if [[ -n "${proj_sessions//\\n/}" ]]; then
-        sess_choice=$(printf "%s\n%b" "$NEW" "$proj_sessions" | sed '/^$/d' | "$_fzf" --no-sort --ansi \
-            --border-label " ${proj_name} sessions " --prompt '> ' \
-            --header '  Enter=attach  k=kill' \
-            --pointer '>' --cycle \
-            --bind "k:execute-silent($_tmux kill-session -t \"\$(echo {} | sed 's/  .*//')\" 2>/dev/null)+reload(echo '+ New Session'; $_tmux list-sessions -F '#{session_name}  (#{session_windows} windows)' 2>/dev/null | grep '^${proj_name}/')")
-    else
-        sess_choice="$NEW"
-    fi
+    local sess_choice session_picker_lines
+    session_picker_lines=$(printf "%s\n%b" "$NEW" "$proj_sessions" | sed '/^$/d')
+    sess_choice=$(printf '%s\n' "$session_picker_lines" | "$_fzf" --no-sort --ansi \
+        --border-label " ${proj_name} sessions " --prompt '> ' \
+        --header '  Enter=open  k=kill' \
+        --pointer '>' --cycle \
+        --bind "k:execute-silent($_tmux kill-session -t \"\$(echo {} | sed 's/  .*//')\" 2>/dev/null)+reload(echo '+ New Session'; $_tmux list-sessions -F '#{session_name}  (#{session_windows} windows)' 2>/dev/null | grep '^${proj_name}/')")
 
     [[ -z "$sess_choice" ]] && return
 
