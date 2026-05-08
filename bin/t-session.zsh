@@ -8,6 +8,8 @@
 : "${TMUX_PROJECT_HOOKS:=$TMUX_PROJECT_DIR/hooks}"
 : "${TMUX_PROJECT_DEFAULT_DIR:=$HOME/Projects}"
 : "${TMUX_PROJECT_FAVORITES:=$TMUX_PROJECT_DIR/favorites}"
+: "${TMUX_PROJECT_EXCLUSIVE_ATTACH:=1}"
+: "${TMUX_PROJECT_REFRESH_ON_OPEN:=1}"
 
 # Project aliases (display name overrides). Users can customize in
 # ~/.config/tmux-project/aliases — format: full-name=short-name
@@ -195,6 +197,32 @@ _tp_session_line_for() {
     return 1
 }
 
+_tp_truthy() {
+    local value="${1:l}"
+    [[ "$value" == "1" || "$value" == "true" || "$value" == "yes" || "$value" == "on" ]]
+}
+
+_tp_refresh_session() {
+    local _tmux="$1" session_name="$2"
+    _tp_truthy "$TMUX_PROJECT_REFRESH_ON_OPEN" || return 0
+
+    "$_tmux" resize-window -A -t "=${session_name}:1" 2>/dev/null || true
+    "$_tmux" refresh-client -S 2>/dev/null || true
+}
+
+_tp_detach_stale_clients() {
+    local _tmux="$1" session_name="$2"
+    _tp_truthy "$TMUX_PROJECT_EXCLUSIVE_ATTACH" || return 0
+
+    local current_session=""
+    if [[ -n "$TMUX" ]]; then
+        current_session=$("$_tmux" display-message -p '#S' 2>/dev/null || true)
+    fi
+    [[ "$current_session" == "$session_name" ]] && return 0
+
+    "$_tmux" detach-client -s "=$session_name" 2>/dev/null || true
+}
+
 _tp_create_session() {
     local _tmux="$1" session_name="$2" project_path="${3:-}"
     if [[ -n "$TMUX" ]]; then
@@ -203,7 +231,8 @@ _tp_create_session() {
         else
             "$_tmux" new-session -d -s "$session_name"
         fi
-        "$_tmux" switch-client -t "$session_name"
+        "$_tmux" switch-client -t "=$session_name"
+        _tp_refresh_session "$_tmux" "$session_name"
     else
         if [[ -n "$project_path" ]]; then
             "$_tmux" new-session -s "$session_name" -c "$project_path"
@@ -216,9 +245,16 @@ _tp_create_session() {
 _tp_open_session() {
     local _tmux="$1" session_name="$2"
     if [[ -n "$TMUX" ]]; then
-        "$_tmux" switch-client -t "$session_name"
+        _tp_detach_stale_clients "$_tmux" "$session_name"
+        "$_tmux" switch-client -t "=$session_name"
+        _tp_refresh_session "$_tmux" "$session_name"
     else
-        "$_tmux" attach-session -t "$session_name"
+        _tp_refresh_session "$_tmux" "$session_name"
+        if _tp_truthy "$TMUX_PROJECT_EXCLUSIVE_ATTACH"; then
+            "$_tmux" attach-session -d -t "=$session_name"
+        else
+            "$_tmux" attach-session -t "=$session_name"
+        fi
     fi
 }
 

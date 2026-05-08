@@ -5,6 +5,7 @@ Project-first tmux session manager. Organizes tmux sessions by project with an f
 ## What It Does
 
 - **`t` command** — Pick a project, then pick/create a session. Outside tmux it attaches; inside tmux it switches the current client without disrupting other sessions.
+- **Live resume by default** — Existing sessions are opened with exact tmux targets, stale clients are detached by default, and tmux is asked to resize/refresh before opening so TUIs do not resume as narrow/static restored frames.
 - **Project roots + registry** — Configure one or many parent folders in `~/.config/tmux-project/project-roots`; direct child directories appear automatically in the picker. Add explicit one-off entries in `workspace-paths`.
 - **Favorites + active-first ordering** — Press `F` in the project picker to pin or unpin a project. Favorites are shown first, projects with active sessions next, then the remaining projects alphabetically.
 - **Status bar** — CPU, memory, network, and battery in your tmux status line. Auto-detects macOS, Linux, and Windows (MSYS2/WSL).
@@ -82,6 +83,11 @@ The same project picker is used inside tmux. Existing sessions are opened with
 `switch-client`; new sessions are created detached and then switched to, so no
 nested tmux client is started.
 
+By default, opening an existing session is exclusive: stale clients on that
+target session are detached and the target window is resized/refreshed before the
+switch/attach. This avoids a common failure mode where a Claude/Copilot TUI
+appears as a static, narrow restored frame instead of a live resumed session.
+
 ## Configuration
 
 All config lives in `~/.config/tmux-project/` (override with `$TMUX_PROJECT_DIR`).
@@ -143,6 +149,26 @@ troot edit
 | `TMUX_PROJECT_DIR` | `~/.config/tmux-project` | Config directory |
 | `TMUX_PROJECT_DEFAULT_DIR` | `~/Projects` | Default parent for new projects |
 | `TMUX_PROJECT_ROOTS` | `$TMUX_PROJECT_DIR/project-roots` | Project roots file |
+| `TMUX_PROJECT_EXCLUSIVE_ATTACH` | `1` | Detach stale clients when opening existing sessions (`0` keeps shared attach behavior) |
+| `TMUX_PROJECT_REFRESH_ON_OPEN` | `1` | Run tmux resize/refresh before opening existing sessions |
+
+## AI Skills
+
+The `skills/graduate/` directory contains `/graduate` -- a skill for Claude Code and Copilot CLI that "graduates" an exploratory conversation into a project. When you're in a freeform session brainstorming or prototyping and it becomes a real project, `/graduate`:
+
+1. Asks you to pick an existing T project or name a new one
+2. Registers new projects in T's `workspace-paths`
+3. Synthesizes the full conversation into a structured context document
+4. Writes to both `.claude/context.md` (Claude Code) and `.github/copilot-instructions.md` (Copilot CLI)
+5. Copies a kickoff prompt to your clipboard
+6. Opens a tmux session in the project directory
+
+### Install
+
+- **Claude Code**: `cp skills/graduate/claude-code.md ~/.claude/commands/graduate.md`
+- **Copilot CLI**: `mkdir -p ~/.copilot/skills/graduate && cp skills/graduate/copilot-cli.md ~/.copilot/skills/graduate/SKILL.md`
+
+Then use `/graduate` from any session.
 
 ## File Structure
 
@@ -151,6 +177,10 @@ tmux-project/
 ├── bin/
 │   ├── t-session.zsh        # zsh session manager
 │   └── t-session.bash       # bash session manager
+├── skills/
+│   └── graduate/
+│       ├── claude-code.md   # /graduate for Claude Code
+│       └── copilot-cli.md   # /graduate for Copilot CLI
 ├── status/
 │   ├── status.sh            # OS dispatcher
 │   ├── status-darwin.sh     # macOS metrics
